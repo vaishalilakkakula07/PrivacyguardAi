@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Papa from 'papaparse';
 import {
   AlertCircle,
@@ -31,6 +31,9 @@ import { SAMPLE_DATASETS } from '../data/samples.ts';
 interface WorkspaceSectionProps {
   inputText: string;
   onInputTextChange: (val: string) => void;
+  onUploadFile: (content: string, detectedFormat: InputFormat, fileName: string) => void;
+  onClearWorkspace: () => void;
+  activeSourceLabel: string;
   format: InputFormat;
   onFormatChange: (fmt: InputFormat) => void;
   categories: Record<DetectionCategory, boolean>;
@@ -174,6 +177,9 @@ function HighlightedOriginalText({
 export default function WorkspaceSection({
   inputText,
   onInputTextChange,
+  onUploadFile,
+  onClearWorkspace,
+  activeSourceLabel,
   format,
   onFormatChange,
   categories,
@@ -197,18 +203,41 @@ export default function WorkspaceSection({
   const [newTerm, setNewTerm] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [previewMode, setPreviewMode] = useState<'raw' | 'table'>('raw');
-  const [compareViewMode, setCompareViewMode] = useState<'text' | 'csv-table'>('text');
+  const [previewMode, setPreviewMode] = useState<'raw' | 'table'>(
+    format === 'csv' ? 'table' : 'raw'
+  );
+  const [compareViewMode, setCompareViewMode] = useState<'text' | 'csv-table'>(
+    format === 'csv' ? 'csv-table' : 'text'
+  );
   const [copiedOutput, setCopiedOutput] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState<DetectedEntity | null>(null);
 
+  // Automatically sync comparison table view whenever a CSV scan result arrives
+  useEffect(() => {
+    if (scanResult?.csvComparison) {
+      setCompareViewMode('csv-table');
+    } else {
+      setCompareViewMode('text');
+    }
+    setSelectedEntity(null);
+  }, [scanResult?.csvComparison, scanResult?.originalText]);
+
+  // Sync preview mode when switching between CSV and TXT
+  useEffect(() => {
+    setPreviewMode(format === 'csv' ? 'table' : 'raw');
+  }, [format]);
+
   const parsedInputPreview = useMemo(() => {
     if (format !== 'csv' || !inputText.trim()) return null;
-    const parsed = Papa.parse<string[]>(inputText.trim(), { skipEmptyLines: true });
+    const clean = inputText.replace(/^\uFEFF/, '').trim();
+    const parsed = Papa.parse<string[]>(clean, {
+      skipEmptyLines: true,
+      delimitersToGuess: [',', ';', '\t', '|'],
+    });
     if (parsed.data.length < 2) return null;
     return {
       headers: parsed.data[0],
-      rows: parsed.data.slice(1, 15),
+      rows: parsed.data.slice(1, 101),
       totalRows: parsed.data.length - 1,
     };
   }, [format, inputText]);
@@ -231,16 +260,17 @@ export default function WorkspaceSection({
 
     const reader = new FileReader();
     reader.onload = () => {
-      const content = typeof reader.result === 'string' ? reader.result : '';
+      const rawContent = typeof reader.result === 'string' ? reader.result : '';
+      const content = rawContent.replace(/^\uFEFF/, '');
       if (!content.trim()) {
         setUploadError('The uploaded file is empty.');
         return;
       }
+      const detectedFormat: InputFormat = isCsv ? 'csv' : 'text';
       setUploadedFileName(file.name);
-      onFormatChange(isCsv ? 'csv' : 'text');
-      onInputTextChange(content);
       setPreviewMode(isCsv ? 'table' : 'raw');
       setCompareViewMode(isCsv ? 'csv-table' : 'text');
+      onUploadFile(content, detectedFormat, file.name);
     };
     reader.onerror = () => {
       setUploadError('Unable to read the selected file.');
@@ -266,6 +296,11 @@ export default function WorkspaceSection({
       // Clipboard fallback ignored safely
     }
   };
+
+  const maxDiffRows = 250;
+  const totalCsvDiffRows = scanResult?.csvComparison?.anonymizedRows.length ?? 0;
+  const visibleCsvDiffRows =
+    scanResult?.csvComparison?.anonymizedRows.slice(0, maxDiffRows) ?? [];
 
   return (
     <section
@@ -293,10 +328,10 @@ export default function WorkspaceSection({
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span>Processing: In-Memory Only</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span className="font-semibold text-emerald-700">{activeSourceLabel}</span>
             <span aria-hidden="true">·</span>
-            <span>No Database Storage</span>
+            <span>In-Memory Only</span>
             <span aria-hidden="true">·</span>
             <span>NLP/NER + Regex</span>
           </div>
@@ -343,8 +378,6 @@ export default function WorkspaceSection({
                       setUploadedFileName(null);
                       setUploadError(null);
                       onLoadSample(sample.id);
-                      setPreviewMode(sample.format === 'csv' ? 'table' : 'raw');
-                      setCompareViewMode(sample.format === 'csv' ? 'csv-table' : 'text');
                     }}
                     className="flex flex-col items-start rounded-lg border border-slate-200 bg-white p-3 text-left transition-colors duration-150 hover:border-emerald-400 hover:bg-emerald-50/50 cursor-pointer"
                   >
@@ -414,7 +447,6 @@ export default function WorkspaceSection({
                     onClick={() => {
                       onFormatChange('text');
                       setPreviewMode('raw');
-                      setCompareViewMode('text');
                     }}
                     className={`flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                       format === 'text'
@@ -429,7 +461,6 @@ export default function WorkspaceSection({
                     type="button"
                     onClick={() => {
                       onFormatChange('csv');
-                      setCompareViewMode('csv-table');
                     }}
                     className={`flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                       format === 'csv'
@@ -495,9 +526,9 @@ export default function WorkspaceSection({
                   <button
                     type="button"
                     onClick={() => {
-                      onInputTextChange('');
                       setUploadedFileName(null);
                       setUploadError(null);
+                      onClearWorkspace();
                     }}
                     className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 cursor-pointer"
                   >
@@ -546,9 +577,12 @@ export default function WorkspaceSection({
                 <textarea
                   id="raw-data-input"
                   value={inputText}
-                  onChange={(e) => onInputTextChange(e.target.value)}
+                  onChange={(e) => {
+                    setUploadedFileName(null);
+                    onInputTextChange(e.target.value);
+                  }}
                   rows={12}
-                  placeholder="Paste unstructured text, logs, or CSV rows here, or load one of the fictional datasets above..."
+                  placeholder="Paste unstructured text, logs, or CSV rows here, upload a .csv/.txt file, or load a sample dataset above..."
                   className="w-full rounded-lg border border-slate-300 bg-white p-3.5 font-mono text-xs leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none"
                 />
               )}
@@ -716,35 +750,34 @@ export default function WorkspaceSection({
             </div>
 
             {/* Primary Scan Action */}
-            <div className="space-y-2">
-              {scanResult && inputText !== scanResult.originalText && (
-                <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
-                  Source text modified. Click below to re-scan and update results.
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={onRunScan}
-                disabled={isScanning || !inputText.trim()}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-              >
-                <ScanSearch className="h-4 w-4" />
-                <span>
-                  {isScanning ? 'Scanning & Anonymizing...' : 'Scan & Anonymize Data'}
-                </span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={onRunScan}
+              disabled={isScanning || !inputText.trim()}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition-colors duration-150 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
+              <ScanSearch className="h-4 w-4" />
+              <span>
+                {isScanning ? 'Scanning & Anonymizing...' : 'Scan & Anonymize Data'}
+              </span>
+            </button>
           </div>
         </div>
 
         {/* Side-by-Side Comparison & Export Bar */}
-        {scanResult && (
-          <div className="mt-8 rounded-xl border border-emerald-200 bg-slate-50/70 p-5 sm:p-6">
+        {scanResult ? (
+          <div
+            id="workspace-results"
+            className="mt-8 rounded-xl border border-emerald-200 bg-slate-50/70 p-5 sm:p-6"
+          >
             <div className="flex flex-col justify-between gap-4 border-b border-slate-200 pb-4 lg:flex-row lg:items-center">
               <div>
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-950">
                   <Sparkles className="h-4 w-4 text-emerald-600" />
                   <span>Side-by-Side Comparison & Protected Output</span>
+                  <span className="text-xs font-medium text-emerald-700">
+                    ({activeSourceLabel})
+                  </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-600 tabular-nums">
                   {scanResult.metrics.totalEntitiesDetected} sensitive items
@@ -845,9 +878,9 @@ export default function WorkspaceSection({
 
             {/* Comparison Views */}
             {compareViewMode === 'csv-table' && scanResult.csvComparison ? (
-              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <div className="mt-4 max-h-[420px] overflow-auto rounded-lg border border-slate-200 bg-white">
                 <table className="w-full border-collapse text-left text-xs">
-                  <thead className="bg-emerald-50 text-emerald-950">
+                  <thead className="sticky top-0 bg-emerald-50 text-emerald-950">
                     <tr>
                       <th className="border-b border-emerald-200 px-3 py-2.5 font-mono">
                         Row
@@ -863,7 +896,7 @@ export default function WorkspaceSection({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {scanResult.csvComparison.anonymizedRows.map((anonRow, rIdx) => {
+                    {visibleCsvDiffRows.map((anonRow, rIdx) => {
                       const origRow =
                         scanResult.csvComparison?.originalRows[rIdx] ?? [];
                       return (
@@ -899,6 +932,13 @@ export default function WorkspaceSection({
                     })}
                   </tbody>
                 </table>
+                {totalCsvDiffRows > maxDiffRows && (
+                  <div className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 tabular-nums">
+                    Previewing first {maxDiffRows} of {totalCsvDiffRows} rows. All{' '}
+                    {totalCsvDiffRows} rows are anonymized and included when you
+                    click Download CSV.
+                  </div>
+                )}
               </div>
             ) : (
               <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -969,6 +1009,15 @@ export default function WorkspaceSection({
                 </button>
               </div>
             )}
+          </div>
+        ) : (
+          <div
+            id="workspace-results"
+            className="mt-8 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-xs text-slate-500"
+          >
+            Upload a .csv or .txt file, paste your data, or select a sample
+            dataset above and click &ldquo;Scan &amp; Anonymize Data&rdquo; to
+            view side-by-side comparison results.
           </div>
         )}
       </div>

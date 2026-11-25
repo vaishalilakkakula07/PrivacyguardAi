@@ -29,7 +29,25 @@ import type {
   ScanResult,
 } from './engine/types.ts';
 
-const DEFAULT_SAMPLE = SAMPLE_DATASETS[1]; // Banking KYC TXT with rich mixed PII
+const DEFAULT_SAMPLE = SAMPLE_DATASETS[0]; // Healthcare CSV sample on initial load
+
+function looksLikeCsv(text: string): boolean {
+  const trimmed = text.replace(/^\uFEFF/, '').trim();
+  if (!trimmed) return false;
+  const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return false;
+  const parsed = Papa.parse<string[]>(trimmed, {
+    skipEmptyLines: true,
+    delimitersToGuess: [',', ';', '\t', '|'],
+  });
+  if (parsed.data.length < 2) return false;
+  const headerLen = parsed.data[0].length;
+  if (headerLen < 2) return false;
+  const matchingRows = parsed.data
+    .slice(1, 6)
+    .filter((row) => row.length === headerLen).length;
+  return matchingRows >= Math.min(parsed.data.length - 1, 2);
+}
 
 function triggerBrowserDownload(
   content: string,
@@ -50,6 +68,9 @@ function triggerBrowserDownload(
 export default function App() {
   const [inputText, setInputText] = useState<string>(DEFAULT_SAMPLE.content);
   const [format, setFormat] = useState<InputFormat>(DEFAULT_SAMPLE.format);
+  const [activeSourceLabel, setActiveSourceLabel] = useState<string>(
+    `Sample: ${DEFAULT_SAMPLE.title}`
+  );
   const [categories, setCategories] = useState<Record<DetectionCategory, boolean>>({
     name: true,
     email: true,
@@ -94,10 +115,7 @@ export default function App() {
   }, []);
 
   const executeScan = useCallback(
-    async (
-      textToScan: string,
-      options: ScanOptions
-    ) => {
+    async (textToScan: string, options: ScanOptions, scrollToResults = false) => {
       if (!textToScan.trim()) return;
       setIsScanning(true);
       try {
@@ -110,26 +128,42 @@ export default function App() {
           const data = (await response.json()) as ScanResult;
           setScanResult(data);
         } else {
-          // Graceful in-browser engine fallback
           setScanResult(analyzeAndAnonymize(textToScan, options));
         }
       } catch {
         setScanResult(analyzeAndAnonymize(textToScan, options));
       } finally {
         setIsScanning(false);
+        if (scrollToResults) {
+          window.requestAnimationFrame(() => {
+            document
+              .getElementById('workspace-results')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+        }
       }
     },
     []
   );
 
   const handleRunScan = useCallback(() => {
-    void executeScan(inputText, {
-      categories,
-      technique,
-      customTerms,
-      customLabels,
-      format,
-    });
+    if (!inputText.trim()) return;
+    let effectiveFormat = format;
+    if (format === 'text' && looksLikeCsv(inputText)) {
+      effectiveFormat = 'csv';
+      setFormat('csv');
+    }
+    void executeScan(
+      inputText,
+      {
+        categories,
+        technique,
+        customTerms,
+        customLabels,
+        format: effectiveFormat,
+      },
+      true
+    );
   }, [
     executeScan,
     inputText,
@@ -140,9 +174,12 @@ export default function App() {
     format,
   ]);
 
-  // Re-run anonymization immediately when technique or category options change on existing result
+  // Re-run anonymization instantaneously when masking options change on the active input
   useEffect(() => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim()) {
+      setScanResult(null);
+      return;
+    }
     const updated = analyzeAndAnonymize(inputText, {
       categories,
       technique,
@@ -151,8 +188,39 @@ export default function App() {
       format,
     });
     setScanResult(updated);
-    // Intentionally syncs options instantaneously when user toggles masking modes
-  }, [categories, technique, customTerms, customLabels, format]);
+  }, [categories, technique, customTerms, customLabels, format, inputText]);
+
+  const handleInputTextChange = (val: string) => {
+    setInputText(val);
+    setActiveSourceLabel(val.trim() ? 'Manual Input' : 'No Data Loaded');
+  };
+
+  const handleUploadFile = (
+    content: string,
+    detectedFormat: InputFormat,
+    fileName: string
+  ) => {
+    setFormat(detectedFormat);
+    setInputText(content);
+    setActiveSourceLabel(`Uploaded File: ${fileName}`);
+    void executeScan(
+      content,
+      {
+        categories,
+        technique,
+        customTerms,
+        customLabels,
+        format: detectedFormat,
+      },
+      true
+    );
+  };
+
+  const handleClearWorkspace = () => {
+    setInputText('');
+    setScanResult(null);
+    setActiveSourceLabel('No Data Loaded');
+  };
 
   const handleToggleCategory = (cat: DetectionCategory) => {
     setCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -177,23 +245,27 @@ export default function App() {
   const handleLoadSample = (sampleId: string) => {
     const found = SAMPLE_DATASETS.find((s) => s.id === sampleId);
     if (!found) return;
-    setInputText(found.content);
     setFormat(found.format);
+    setInputText(found.content);
     setCustomTerms(found.suggestedCustomTerms);
-    void executeScan(found.content, {
-      categories,
-      technique,
-      customTerms: found.suggestedCustomTerms,
-      customLabels,
-      format: found.format,
-    });
+    setActiveSourceLabel(`Sample: ${found.title}`);
+    void executeScan(
+      found.content,
+      {
+        categories,
+        technique,
+        customTerms: found.suggestedCustomTerms,
+        customLabels,
+        format: found.format,
+      },
+      true
+    );
   };
 
   const handleDownloadCsv = () => {
     if (!scanResult) return;
     let csvPayload = scanResult.anonymizedText;
     if (!scanResult.csvComparison) {
-      // Convert text lines into clean single-column CSV if source was TXT
       const lines = scanResult.anonymizedText.split(/\r?\n/);
       csvPayload = Papa.unparse([['Anonymized_Text'], ...lines.map((l) => [l])]);
     }
@@ -237,7 +309,10 @@ export default function App() {
 
         <WorkspaceSection
           inputText={inputText}
-          onInputTextChange={setInputText}
+          onInputTextChange={handleInputTextChange}
+          onUploadFile={handleUploadFile}
+          onClearWorkspace={handleClearWorkspace}
+          activeSourceLabel={activeSourceLabel}
           format={format}
           onFormatChange={setFormat}
           categories={categories}

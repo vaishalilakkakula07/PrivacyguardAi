@@ -138,6 +138,9 @@ function isLikelyPersonName(candidate: string): boolean {
 }
 
 function detectNamesWithNLP(text: string): RawMatch[] {
+  if (!/[A-Za-z]{2,}/.test(text)) {
+    return [];
+  }
   const matches: RawMatch[] = [];
   const doc = nlp(text);
   const peopleList = doc.people().out('array') as string[];
@@ -490,6 +493,7 @@ function anonymizeSegment(
   text: string,
   options: ScanOptions,
   registry: TokenRegistry,
+  idCounter: { next: number },
   rowIndex?: number,
   columnName?: string
 ): { anonymized: string; entities: DetectedEntity[] } {
@@ -515,8 +519,9 @@ function anonymizeSegment(
     output += replacement;
     cursor = match.end;
 
+    const seqId = idCounter.next++;
     entities.push({
-      id: `ent_${rowIndex ?? 'txt'}_${match.start}_${i}`,
+      id: `ent_${seqId}`,
       category: match.category,
       engineMethod: match.engineMethod,
       original: match.original,
@@ -646,7 +651,9 @@ export function analyzeAndAnonymize(
   options: ScanOptions
 ): ScanResult {
   const startTime = performance.now();
+  const cleanInput = rawInput.replace(/^\uFEFF/, '');
   const registry = createTokenRegistry();
+  const idCounter = { next: 1 };
 
   // Baseline scan with all categories active to measure unmasked exposure accurately even if user disables a category
   const allEnabledOptions: ScanOptions = {
@@ -668,8 +675,9 @@ export function analyzeAndAnonymize(
   let baselineMatches: RawMatch[] = [];
 
   if (options.format === 'csv') {
-    const parsed = Papa.parse<string[]>(rawInput.trim(), {
+    const parsed = Papa.parse<string[]>(cleanInput.trim(), {
       skipEmptyLines: true,
+      delimitersToGuess: [',', ';', '\t', '|'],
     });
 
     const rows = parsed.data;
@@ -690,6 +698,7 @@ export function analyzeAndAnonymize(
             cellValue,
             options,
             registry,
+            idCounter,
             r + 1,
             headers[c]
           );
@@ -707,14 +716,14 @@ export function analyzeAndAnonymize(
       anonymizedText = Papa.unparse([headers, ...anonymizedDataRows]);
     } else {
       // Single-line or malformed CSV fallback to text line scanning
-      baselineMatches = detectAllActiveCategories(rawInput, allEnabledOptions);
-      const res = anonymizeSegment(rawInput, options, registry);
+      baselineMatches = detectAllActiveCategories(cleanInput, allEnabledOptions);
+      const res = anonymizeSegment(cleanInput, options, registry, idCounter);
       anonymizedText = res.anonymized;
       entities = res.entities;
     }
   } else {
-    baselineMatches = detectAllActiveCategories(rawInput, allEnabledOptions);
-    const res = anonymizeSegment(rawInput, options, registry);
+    baselineMatches = detectAllActiveCategories(cleanInput, allEnabledOptions);
+    const res = anonymizeSegment(cleanInput, options, registry, idCounter);
     anonymizedText = res.anonymized;
     entities = res.entities;
   }
@@ -729,7 +738,7 @@ export function analyzeAndAnonymize(
   const processingTimeMs = Math.max(1, Math.round(performance.now() - startTime));
 
   return {
-    originalText: rawInput,
+    originalText: cleanInput,
     anonymizedText,
     format: options.format,
     technique: options.technique,

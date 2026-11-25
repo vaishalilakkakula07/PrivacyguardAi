@@ -9,9 +9,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
-const MAX_INPUT_CHARS = 250_000;
+const MAX_INPUT_CHARS = 1_500_000;
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 // Security headers for defense-in-depth
 app.use((_req, res, next) => {
