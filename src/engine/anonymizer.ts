@@ -754,7 +754,7 @@ export function buildPrivacyAnalysisReport(result: ScanResult): string {
   const { metrics, technique, format, processingTimeMs } = result;
   const lines: string[] = [
     '====================================================================',
-    'PRIVACYGUARD AI — EDUCATIONAL PRIVACY ANALYSIS & ANONYMIZATION REPORT',
+    'PrivacyGuardAI — EDUCATIONAL PRIVACY ANALYSIS & ANONYMIZATION REPORT',
     'AI-Powered Data Anonymization and Privacy Protection System',
     '====================================================================',
     `Generated Timestamp : ${new Date().toISOString()}`,

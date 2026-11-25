@@ -86,7 +86,7 @@ export default function HeroSection({
                 textWrap: 'balance',
               }}
             >
-              PRIVACYGUARD AI
+              PrivacyGuardAI
             </h1>
 
             <p className="mt-3 font-display text-xl font-medium tracking-tight text-emerald-700 sm:text-2xl">
