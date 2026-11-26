@@ -3,17 +3,23 @@ import { Menu, X } from 'lucide-react';
 
 interface NavbarProps {
   onNavigate: (sectionId: string) => void;
+  onOpenReport?: () => void;
+  hasResults?: boolean;
 }
 
 const NAV_LINKS = [
-  { label: 'About', target: 'about' },
+  { label: 'Home', target: 'home' },
   { label: 'Workspace', target: 'workspace' },
+  { label: 'Comparison', target: 'workspace-results' },
   { label: 'Risk Analytics', target: 'analytics' },
-  { label: 'Workflow', target: 'workflow' },
-  { label: 'References', target: 'references' },
+  { label: 'Audit Log', target: 'audit-log' },
 ];
 
-export default function Navbar({ onNavigate }: NavbarProps) {
+export default function Navbar({
+  onNavigate,
+  onOpenReport,
+  hasResults = false,
+}: NavbarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLinkClick = (target: string) => {
@@ -21,8 +27,17 @@ export default function Navbar({ onNavigate }: NavbarProps) {
     onNavigate(target);
   };
 
+  const handlePrimaryAction = () => {
+    setMobileOpen(false);
+    if (hasResults && onOpenReport) {
+      onOpenReport();
+    } else {
+      onNavigate('workspace');
+    }
+  };
+
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/92 backdrop-blur-md">
+    <header className="sticky top-0 z-50 border-b border-slate-200 bg-white/95 backdrop-blur-md">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-8 px-4 py-3.5 sm:px-6 lg:px-8">
         {/* Zone 1: Single-line Brand Wordmark */}
         <a
@@ -33,7 +48,7 @@ export default function Navbar({ onNavigate }: NavbarProps) {
           }}
           className="font-display text-lg font-bold tracking-tight text-slate-950 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
         >
-          PrivacyGuard AI
+          PrivacyGuardAI
         </a>
 
         {/* Zone 2: 5 concise single-line navigation links */}
@@ -60,10 +75,10 @@ export default function Navbar({ onNavigate }: NavbarProps) {
         <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
-            onClick={() => handleLinkClick('workspace')}
+            onClick={handlePrimaryAction}
             className="hidden sm:inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors duration-150 hover:bg-emerald-700 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
           >
-            Launch Workspace
+            {hasResults ? 'Privacy Report' : 'Launch Workspace'}
           </button>
 
           <button
@@ -96,10 +111,10 @@ export default function Navbar({ onNavigate }: NavbarProps) {
             ))}
             <button
               type="button"
-              onClick={() => handleLinkClick('workspace')}
+              onClick={handlePrimaryAction}
               className="mt-2 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 cursor-pointer"
             >
-              Launch Workspace
+              {hasResults ? 'Privacy Report' : 'Launch Workspace'}
             </button>
           </nav>
         </div>

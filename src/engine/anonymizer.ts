@@ -2,7 +2,11 @@ import nlp from 'compromise';
 import Papa from 'papaparse';
 import type {
   AnonymizationTechnique,
+  BatchFileInput,
+  BatchFileResult,
+  BatchScanSummary,
   CategorySummary,
+  CategoryTechniqueMap,
   CsvTableComparison,
   CustomLabelMap,
   DetectedEntity,
@@ -44,6 +48,13 @@ export const CATEGORY_META: Record<
     severityWeight: 9,
     tokenPrefix: 'PHONE',
   },
+  password: {
+    label: 'Passwords & Secrets',
+    shortLabel: 'Password',
+    engineMethod: 'Regex',
+    severityWeight: 16,
+    tokenPrefix: 'PASS',
+  },
   aadhaar: {
     label: 'Aadhaar Numbers',
     shortLabel: 'Aadhaar',
@@ -78,11 +89,100 @@ export const DEFAULT_CUSTOM_LABELS: CustomLabelMap = {
   name: '[CONFIDENTIAL_NAME]',
   email: '[PROTECTED_EMAIL]',
   mobile: '[MASKED_PHONE]',
+  password: '[CREDENTIAL_HIDDEN]',
   aadhaar: '[ID_GOV_AADHAAR]',
   pan: '[ID_TAX_PAN]',
   ip: '[NETWORK_ADDR]',
   custom: '[RESTRICTED_TERM]',
 };
+
+export function createDefaultCategoryTechniques(): CategoryTechniqueMap {
+  return {
+    name: 'replacement',
+    email: 'partial',
+    mobile: 'partial',
+    password: 'complete',
+    aadhaar: 'partial',
+    pan: 'custom',
+    ip: 'replacement',
+    custom: 'custom',
+  };
+}
+
+export function createCategoryTechniqueMap(
+  defaultTechnique: AnonymizationTechnique
+): CategoryTechniqueMap {
+  return {
+    name: defaultTechnique,
+    email: defaultTechnique,
+    mobile: defaultTechnique,
+    password: defaultTechnique,
+    aadhaar: defaultTechnique,
+    pan: defaultTechnique,
+    ip: defaultTechnique,
+    custom: defaultTechnique,
+  };
+}
+
+export const TECHNIQUE_LABELS: Record<AnonymizationTechnique, string> = {
+  complete: 'Complete Masking',
+  partial: 'Partial Masking',
+  replacement: 'Token Replacement',
+  custom: 'Custom Label',
+};
+
+const PREVIEW_SAMPLES: Record<DetectionCategory, string> = {
+  name: 'Aarav Kulkarni',
+  email: 'aarav@maildemo.in',
+  mobile: '+91 9848012345',
+  password: 'BankVault#4920',
+  aadhaar: '4512 8890 3421',
+  pan: 'ABCDE1234F',
+  ip: '192.168.14.22',
+  custom: 'Project Falcon',
+};
+
+export function getCategoryPreview(
+  category: DetectionCategory,
+  technique: AnonymizationTechnique,
+  customLabels: CustomLabelMap
+): string {
+  const sample = PREVIEW_SAMPLES[category];
+  switch (technique) {
+    case 'complete':
+      return '[REDACTED]';
+    case 'partial':
+      return applyPartialMask(sample, category);
+    case 'replacement':
+      return `[${CATEGORY_META[category].tokenPrefix}_001]`;
+    case 'custom': {
+      const label = customLabels[category]?.trim();
+      return label || '[CUSTOM_MASKED]';
+    }
+  }
+}
+
+function getEffectiveTechnique(
+  category: DetectionCategory,
+  options: ScanOptions
+): AnonymizationTechnique {
+  return options.categoryTechniques?.[category] ?? options.technique;
+}
+
+function buildResolvedCategoryTechniques(
+  options: ScanOptions
+): CategoryTechniqueMap {
+  return {
+    name: getEffectiveTechnique('name', options),
+    email: getEffectiveTechnique('email', options),
+    mobile: getEffectiveTechnique('mobile', options),
+    password: getEffectiveTechnique('password', options),
+    aadhaar: getEffectiveTechnique('aadhaar', options),
+    pan: getEffectiveTechnique('pan', options),
+    ip: getEffectiveTechnique('ip', options),
+    custom: getEffectiveTechnique('custom', options),
+  };
+}
 
 interface RawMatch {
   category: DetectionCategory;
@@ -111,6 +211,8 @@ const NON_NAME_STOPWORDS = new Set([
   'escalation', 'log', 'fictional', 'sample', 'session', 'access', 'agent',
   'alternate', 'contact', 'secondary', 'audit', 'terminal', 'registered',
   'identifiers', 'support', 'compliance', 'exception', 'facility', 'system',
+  'password', 'passwd', 'pwd', 'passcode', 'secret', 'pin', 'credential',
+  'credentials', 'temp', 'reset', 'portal', 'login',
 ]);
 
 function escapeRegex(value: string): string {
@@ -209,9 +311,51 @@ function detectNamesWithNLP(text: string): RawMatch[] {
 
 function detectRegexEntities(
   text: string,
-  customTerms: string[]
+  customTerms: string[],
+  columnName?: string
 ): RawMatch[] {
   const matches: RawMatch[] = [];
+
+  // 0. Passwords, passcodes, PINs, and secret keys (from labeled text or password-named CSV columns)
+  if (
+    columnName &&
+    /^(?:password|passwd|pwd|portal_pwd|user_password|passcode|pin|secret|api_key)$/i.test(
+      columnName.trim()
+    )
+  ) {
+    const trimmedCell = text.trim();
+    if (trimmedCell.length > 0 && !/^(?:null|none|n\/a|na|-)$/i.test(trimmedCell)) {
+      const startIdx = text.indexOf(trimmedCell);
+      matches.push({
+        category: 'password',
+        engineMethod: 'Regex',
+        original: trimmedCell,
+        start: startIdx,
+        end: startIdx + trimmedCell.length,
+        reason: `Detected credential value in CSV column "${columnName}"`,
+        priority: 14,
+      });
+    }
+  }
+
+  const passwordRegex =
+    /\b(?:temp\s+password|reset\s+passcode|password|passwd|pwd|passcode|secret(?:\s*key)?|auth\s*pin|pin)\s*(?:is|=|:)\s*([^\s,;'"`]+)/gi;
+  let pm: RegExpExecArray | null;
+  while ((pm = passwordRegex.exec(text)) !== null) {
+    const secretVal = pm[1];
+    if (secretVal && secretVal.length >= 3) {
+      const valStart = pm.index + pm[0].lastIndexOf(secretVal);
+      matches.push({
+        category: 'password',
+        engineMethod: 'Regex',
+        original: secretVal,
+        start: valStart,
+        end: valStart + secretVal.length,
+        reason: 'Matched labeled password / credential pattern',
+        priority: 14,
+      });
+    }
+  }
 
   // 1. Email addresses
   const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
@@ -412,6 +556,9 @@ function applyPartialMask(value: string, category: DetectionCategory): string {
         })
         .join(' ');
     }
+    case 'password': {
+      return '••••••••';
+    }
     case 'custom':
     default: {
       if (value.length <= 2) return '**';
@@ -431,6 +578,7 @@ function createTokenRegistry(): TokenRegistry {
       name: 0,
       email: 0,
       mobile: 0,
+      password: 0,
       aadhaar: 0,
       pan: 0,
       ip: 0,
@@ -471,7 +619,8 @@ function formatAnonymizedValue(
 
 function detectAllActiveCategories(
   text: string,
-  options: ScanOptions
+  options: ScanOptions,
+  columnName?: string
 ): RawMatch[] {
   const candidates: RawMatch[] = [];
 
@@ -479,7 +628,11 @@ function detectAllActiveCategories(
     candidates.push(...detectNamesWithNLP(text));
   }
 
-  const regexMatches = detectRegexEntities(text, options.categories.custom ? options.customTerms : []);
+  const regexMatches = detectRegexEntities(
+    text,
+    options.categories.custom ? options.customTerms : [],
+    columnName
+  );
   for (const rm of regexMatches) {
     if (options.categories[rm.category]) {
       candidates.push(rm);
@@ -497,7 +650,7 @@ function anonymizeSegment(
   rowIndex?: number,
   columnName?: string
 ): { anonymized: string; entities: DetectedEntity[] } {
-  const matches = detectAllActiveCategories(text, options);
+  const matches = detectAllActiveCategories(text, options, columnName);
   if (matches.length === 0) {
     return { anonymized: text, entities: [] };
   }
@@ -508,11 +661,12 @@ function anonymizeSegment(
 
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
+    const effectiveTechnique = getEffectiveTechnique(match.category, options);
     output += text.slice(cursor, match.start);
     const replacement = formatAnonymizedValue(
       match.original,
       match.category,
-      options.technique,
+      effectiveTechnique,
       options.customLabels,
       registry
     );
@@ -524,6 +678,7 @@ function anonymizeSegment(
       id: `ent_${seqId}`,
       category: match.category,
       engineMethod: match.engineMethod,
+      techniqueApplied: effectiveTechnique,
       original: match.original,
       anonymized: replacement,
       start: match.start,
@@ -541,38 +696,39 @@ function anonymizeSegment(
 function computeRiskMetrics(
   allDetectedIfAllEnabled: RawMatch[],
   appliedEntities: DetectedEntity[],
-  technique: AnonymizationTechnique,
   options: ScanOptions
 ): RiskAnalysisMetrics {
   const categoriesOrder: DetectionCategory[] = [
     'name',
     'email',
     'mobile',
+    'password',
     'aadhaar',
     'pan',
     'ip',
     'custom',
   ];
 
-  // Partial masking retains structural cues (e.g. email domain, last 4 digits), whereas full/token masking removes direct identifiers
-  const residualFactorForActiveTechnique =
-    technique === 'partial' ? 0.12 : 0.008;
-
   const categoryBreakdown: CategorySummary[] = categoriesOrder.map((cat) => {
     const meta = CATEGORY_META[cat];
     const baselineCount = allDetectedIfAllEnabled.filter((m) => m.category === cat).length;
     const maskedCount = appliedEntities.filter((e) => e.category === cat).length;
     const isEnabled = options.categories[cat];
+    const effectiveTechnique = getEffectiveTechnique(cat, options);
+
+    // Partial masking retains structural cues (e.g. email domain, last 4 digits), whereas full/token masking removes direct identifiers
+    const residualFactor = effectiveTechnique === 'partial' ? 0.12 : 0.008;
 
     const beforeExposure = baselineCount;
     const afterExposure = isEnabled
-      ? Number((maskedCount * residualFactorForActiveTechnique).toFixed(2))
+      ? Number((maskedCount * residualFactor).toFixed(2))
       : baselineCount;
 
     return {
       category: cat,
       label: meta.label,
       engineMethod: meta.engineMethod,
+      techniqueApplied: effectiveTechnique,
       detectedCount: isEnabled ? maskedCount : baselineCount,
       anonymizedCount: isEnabled ? maskedCount : 0,
       beforeExposure,
@@ -662,6 +818,7 @@ export function analyzeAndAnonymize(
       name: true,
       email: true,
       mobile: true,
+      password: true,
       aadhaar: true,
       pan: true,
       ip: true,
@@ -691,7 +848,11 @@ export function analyzeAndAnonymize(
         const anonRow: string[] = [];
         for (let c = 0; c < headers.length; c++) {
           const cellValue = row[c] ?? '';
-          const cellBaseline = detectAllActiveCategories(cellValue, allEnabledOptions);
+          const cellBaseline = detectAllActiveCategories(
+            cellValue,
+            allEnabledOptions,
+            headers[c]
+          );
           baselineMatches.push(...cellBaseline);
 
           const { anonymized, entities: cellEntities } = anonymizeSegment(
@@ -731,9 +892,16 @@ export function analyzeAndAnonymize(
   const metrics = computeRiskMetrics(
     baselineMatches,
     entities,
-    options.technique,
     options
   );
+
+  const resolvedTechniques = buildResolvedCategoryTechniques(options);
+  const uniqueTechniques = new Set(Object.values(resolvedTechniques));
+  const isMixedMode = uniqueTechniques.size > 1;
+  const primaryTechnique: AnonymizationTechnique =
+    uniqueTechniques.size === 1
+      ? Array.from(uniqueTechniques)[0]
+      : options.technique;
 
   const processingTimeMs = Math.max(1, Math.round(performance.now() - startTime));
 
@@ -741,7 +909,9 @@ export function analyzeAndAnonymize(
     originalText: cleanInput,
     anonymizedText,
     format: options.format,
-    technique: options.technique,
+    technique: primaryTechnique,
+    isMixedMode,
+    categoryTechniques: resolvedTechniques,
     entities,
     csvComparison,
     metrics,
@@ -751,7 +921,11 @@ export function analyzeAndAnonymize(
 }
 
 export function buildPrivacyAnalysisReport(result: ScanResult): string {
-  const { metrics, technique, format, processingTimeMs } = result;
+  const { metrics, technique, isMixedMode, format, processingTimeMs } = result;
+  const modeSummary = isMixedMode
+    ? 'MIXED (PER-CATEGORY STYLES)'
+    : TECHNIQUE_LABELS[technique].toUpperCase();
+
   const lines: string[] = [
     '====================================================================',
     'PrivacyGuardAI — EDUCATIONAL PRIVACY ANALYSIS & ANONYMIZATION REPORT',
@@ -759,7 +933,7 @@ export function buildPrivacyAnalysisReport(result: ScanResult): string {
     '====================================================================',
     `Generated Timestamp : ${new Date().toISOString()}`,
     `Input Format        : ${format.toUpperCase()}`,
-    `Masking Technique   : ${technique.toUpperCase()}`,
+    `Masking Mode        : ${modeSummary}`,
     `Processing Mode     : Ephemeral In-Memory (0 bytes persisted)`,
     `Scan Duration       : ${processingTimeMs} ms`,
     '',
@@ -773,15 +947,17 @@ export function buildPrivacyAnalysisReport(result: ScanResult): string {
     `  - Regex Engine Detections     : ${metrics.regexEntitiesCount}`,
     `  - Custom Rule Detections      : ${metrics.customEntitiesCount}`,
     '',
-    '2. CATEGORY-WISE DETECTION BREAKDOWN',
+    '2. CATEGORY-WISE DETECTION & MASKING STYLE BREAKDOWN',
     '--------------------------------------------------------------------',
   ];
 
   for (const cat of metrics.categoryBreakdown) {
     lines.push(
-      `${cat.label.padEnd(26)} | Engine: ${cat.engineMethod.padEnd(11)} | Detected: ${String(
-        cat.detectedCount
-      ).padStart(3)} | Anonymized: ${String(cat.anonymizedCount).padStart(3)}`
+      `${cat.label.padEnd(23)} | ${cat.engineMethod.padEnd(11)} | Style: ${TECHNIQUE_LABELS[
+        cat.techniqueApplied
+      ].padEnd(17)} | Detected: ${String(cat.detectedCount).padStart(
+        3
+      )} | Anonymized: ${String(cat.anonymizedCount).padStart(3)}`
     );
   }
 
@@ -792,6 +968,213 @@ export function buildPrivacyAnalysisReport(result: ScanResult): string {
     metrics.limitationsNote,
     'Never upload real confidential patient, banking, or citizen records',
     'to a public demonstration environment.',
+    '===================================================================='
+  );
+
+  return lines.join('\n');
+}
+
+export function analyzeBatchFiles(
+  batchFiles: BatchFileInput[],
+  options: Omit<ScanOptions, 'format'>
+): BatchScanSummary {
+  const startTime = performance.now();
+  const categoriesOrder: DetectionCategory[] = [
+    'name',
+    'email',
+    'mobile',
+    'password',
+    'aadhaar',
+    'pan',
+    'ip',
+    'custom',
+  ];
+
+  const results: BatchFileResult[] = batchFiles.map((file) => {
+    const result = analyzeAndAnonymize(file.content, {
+      ...options,
+      format: file.format,
+    });
+    return {
+      id: file.id,
+      fileName: file.fileName,
+      relativePath: file.relativePath,
+      format: file.format,
+      sizeBytes: file.sizeBytes,
+      result,
+    };
+  });
+
+  const totalFiles = results.length;
+  const totalSizeBytes = results.reduce((sum, f) => sum + f.sizeBytes, 0);
+  const totalEntitiesDetected = results.reduce(
+    (sum, f) => sum + f.result.metrics.totalEntitiesDetected,
+    0
+  );
+  const totalEntitiesAnonymized = results.reduce(
+    (sum, f) => sum + f.result.metrics.totalEntitiesAnonymized,
+    0
+  );
+  const nlpEntitiesCount = results.reduce(
+    (sum, f) => sum + f.result.metrics.nlpEntitiesCount,
+    0
+  );
+  const regexEntitiesCount = results.reduce(
+    (sum, f) => sum + f.result.metrics.regexEntitiesCount,
+    0
+  );
+  const customEntitiesCount = results.reduce(
+    (sum, f) => sum + f.result.metrics.customEntitiesCount,
+    0
+  );
+
+  const avgBeforeRiskScore =
+    totalFiles === 0
+      ? 0
+      : Math.round(
+          results.reduce((sum, f) => sum + f.result.metrics.beforeRiskScore, 0) /
+            totalFiles
+        );
+  const avgAfterRiskScore =
+    totalFiles === 0
+      ? 0
+      : Math.round(
+          results.reduce((sum, f) => sum + f.result.metrics.afterRiskScore, 0) /
+            totalFiles
+        );
+  const maxBeforeRiskScore =
+    totalFiles === 0
+      ? 0
+      : Math.max(...results.map((f) => f.result.metrics.beforeRiskScore));
+
+  const overallRiskReductionPercent =
+    avgBeforeRiskScore === 0
+      ? 0
+      : Math.max(
+          0,
+          Math.round(
+            ((avgBeforeRiskScore - avgAfterRiskScore) / avgBeforeRiskScore) * 100
+          )
+        );
+
+  const categoryBreakdown: CategorySummary[] = categoriesOrder.map((cat) => {
+    const meta = CATEGORY_META[cat];
+    const effectiveTechnique = getEffectiveTechnique(cat, {
+      ...options,
+      format: 'text',
+    });
+
+    let detectedCount = 0;
+    let anonymizedCount = 0;
+    let beforeExposure = 0;
+    let afterExposure = 0;
+
+    for (const file of results) {
+      const match = file.result.metrics.categoryBreakdown.find(
+        (c) => c.category === cat
+      );
+      if (match) {
+        detectedCount += match.detectedCount;
+        anonymizedCount += match.anonymizedCount;
+        beforeExposure += match.beforeExposure;
+        afterExposure += match.afterExposure;
+      }
+    }
+
+    return {
+      category: cat,
+      label: meta.label,
+      engineMethod: meta.engineMethod,
+      techniqueApplied: effectiveTechnique,
+      detectedCount,
+      anonymizedCount,
+      beforeExposure,
+      afterExposure: Number(afterExposure.toFixed(2)),
+      severityWeight: meta.severityWeight,
+    };
+  });
+
+  const totalProcessingTimeMs = Math.max(
+    1,
+    Math.round(performance.now() - startTime)
+  );
+
+  return {
+    totalFiles,
+    totalSizeBytes,
+    totalEntitiesDetected,
+    totalEntitiesAnonymized,
+    avgBeforeRiskScore,
+    avgAfterRiskScore,
+    maxBeforeRiskScore,
+    overallRiskReductionPercent,
+    nlpEntitiesCount,
+    regexEntitiesCount,
+    customEntitiesCount,
+    totalProcessingTimeMs,
+    categoryBreakdown,
+    files: results,
+  };
+}
+
+export function buildBatchPrivacyReport(batch: BatchScanSummary): string {
+  const lines: string[] = [
+    '====================================================================',
+    'PrivacyGuardAI — BATCH PRIVACY RISK & ANONYMIZATION REPORT',
+    'AI-Powered Data Anonymization and Privacy Protection System',
+    '====================================================================',
+    `Generated Timestamp   : ${new Date().toISOString()}`,
+    `Files Processed       : ${batch.totalFiles}`,
+    `Total Payload Size    : ${(batch.totalSizeBytes / 1024).toFixed(1)} KB`,
+    `Processing Mode       : Ephemeral In-Memory (0 bytes persisted)`,
+    `Total Batch Duration  : ${batch.totalProcessingTimeMs} ms`,
+    '',
+    '1. BATCH PRIVACY RISK SUMMARY',
+    '--------------------------------------------------------------------',
+    `Average Before Risk Score     : ${batch.avgBeforeRiskScore}/100 (Peak: ${batch.maxBeforeRiskScore}/100)`,
+    `Average After Risk Score      : ${batch.avgAfterRiskScore}/100`,
+    `Overall Exposure Reduction    : ${batch.overallRiskReductionPercent}%`,
+    `Total Entities Anonymized     : ${batch.totalEntitiesAnonymized}`,
+    `  - NLP/NER Engine Detections : ${batch.nlpEntitiesCount}`,
+    `  - Regex Engine Detections   : ${batch.regexEntitiesCount}`,
+    `  - Custom Rule Detections    : ${batch.customEntitiesCount}`,
+    '',
+    '2. AGGREGATED CATEGORY BREAKDOWN ACROSS ALL FILES',
+    '--------------------------------------------------------------------',
+  ];
+
+  for (const cat of batch.categoryBreakdown) {
+    lines.push(
+      `${cat.label.padEnd(23)} | ${cat.engineMethod.padEnd(11)} | Style: ${TECHNIQUE_LABELS[
+        cat.techniqueApplied
+      ].padEnd(17)} | Detected: ${String(cat.detectedCount).padStart(
+        4
+      )} | Anonymized: ${String(cat.anonymizedCount).padStart(4)}`
+    );
+  }
+
+  lines.push(
+    '',
+    '3. PER-FILE RISK & ANONYMIZATION SUMMARY',
+    '--------------------------------------------------------------------'
+  );
+
+  for (const item of batch.files) {
+    const m = item.result.metrics;
+    lines.push(
+      `${item.relativePath.padEnd(32)} | ${item.format.toUpperCase().padEnd(4)} | Entities: ${String(
+        m.totalEntitiesDetected
+      ).padStart(4)} | Before: ${String(m.beforeRiskScore).padStart(
+        2
+      )}/100 -> After: ${String(m.afterRiskScore).padStart(2)}/100 (-${m.riskReductionPercent}%)`
+    );
+  }
+
+  lines.push(
+    '',
+    '4. IMPORTANT PRIVACY & METHODOLOGY DISCLAIMER',
+    '--------------------------------------------------------------------',
+    'Educational estimate only. Automated NLP/NER and regex pipelines reduce direct identifier exposure but cannot guarantee zero re-identification risk against quasi-identifiers or unseen formats.',
     '===================================================================='
   );
 

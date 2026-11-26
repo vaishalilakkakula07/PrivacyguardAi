@@ -1,9 +1,13 @@
 import { Download, FileCheck2, X } from 'lucide-react';
-import { buildPrivacyAnalysisReport } from '../engine/anonymizer.ts';
-import type { ScanResult } from '../engine/types.ts';
+import {
+  buildBatchPrivacyReport,
+  buildPrivacyAnalysisReport,
+} from '../engine/anonymizer.ts';
+import type { BatchScanSummary, ScanResult } from '../engine/types.ts';
 
 interface PrivacyReportModalProps {
   scanResult: ScanResult | null;
+  batchSummary?: BatchScanSummary | null;
   isOpen: boolean;
   onClose: () => void;
   onDownloadReport: () => void;
@@ -11,13 +15,16 @@ interface PrivacyReportModalProps {
 
 export default function PrivacyReportModal({
   scanResult,
+  batchSummary,
   isOpen,
   onClose,
   onDownloadReport,
 }: PrivacyReportModalProps) {
-  if (!isOpen || !scanResult) return null;
+  if (!isOpen || (!scanResult && !batchSummary)) return null;
 
-  const reportText = buildPrivacyAnalysisReport(scanResult);
+  const reportText = batchSummary
+    ? buildBatchPrivacyReport(batchSummary)
+    : buildPrivacyAnalysisReport(scanResult!);
 
   return (
     <div
@@ -34,7 +41,9 @@ export default function PrivacyReportModal({
               id="privacy-report-title"
               className="font-display text-base font-semibold text-slate-950"
             >
-              Generated Privacy Analysis Report
+              {batchSummary
+                ? `Generated Batch Privacy Report (${batchSummary.totalFiles} Files)`
+                : 'Generated Privacy Analysis Report'}
             </h3>
           </div>
           <button

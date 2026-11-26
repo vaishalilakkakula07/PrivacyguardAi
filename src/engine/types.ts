@@ -2,6 +2,7 @@ export type DetectionCategory =
   | 'name'
   | 'email'
   | 'mobile'
+  | 'password'
   | 'aadhaar'
   | 'pan'
   | 'ip'
@@ -17,10 +18,13 @@ export type AnonymizationTechnique =
 
 export type InputFormat = 'text' | 'csv';
 
+export type CategoryTechniqueMap = Record<DetectionCategory, AnonymizationTechnique>;
+
 export interface CustomLabelMap {
   name: string;
   email: string;
   mobile: string;
+  password: string;
   aadhaar: string;
   pan: string;
   ip: string;
@@ -30,6 +34,7 @@ export interface CustomLabelMap {
 export interface ScanOptions {
   categories: Record<DetectionCategory, boolean>;
   technique: AnonymizationTechnique;
+  categoryTechniques?: CategoryTechniqueMap;
   customTerms: string[];
   customLabels: CustomLabelMap;
   format: InputFormat;
@@ -39,6 +44,7 @@ export interface DetectedEntity {
   id: string;
   category: DetectionCategory;
   engineMethod: DetectionEngineMethod;
+  techniqueApplied: AnonymizationTechnique;
   original: string;
   anonymized: string;
   start: number;
@@ -52,6 +58,7 @@ export interface CategorySummary {
   category: DetectionCategory;
   label: string;
   engineMethod: DetectionEngineMethod;
+  techniqueApplied: AnonymizationTechnique;
   detectedCount: number;
   anonymizedCount: number;
   beforeExposure: number;
@@ -85,9 +92,46 @@ export interface ScanResult {
   anonymizedText: string;
   format: InputFormat;
   technique: AnonymizationTechnique;
+  isMixedMode: boolean;
+  categoryTechniques: CategoryTechniqueMap;
   entities: DetectedEntity[];
   csvComparison: CsvTableComparison | null;
   metrics: RiskAnalysisMetrics;
   processingTimeMs: number;
   processedInMemory: boolean;
+}
+
+export interface BatchFileInput {
+  id: string;
+  fileName: string;
+  relativePath: string;
+  format: InputFormat;
+  content: string;
+  sizeBytes: number;
+}
+
+export interface BatchFileResult {
+  id: string;
+  fileName: string;
+  relativePath: string;
+  format: InputFormat;
+  sizeBytes: number;
+  result: ScanResult;
+}
+
+export interface BatchScanSummary {
+  totalFiles: number;
+  totalSizeBytes: number;
+  totalEntitiesDetected: number;
+  totalEntitiesAnonymized: number;
+  avgBeforeRiskScore: number;
+  avgAfterRiskScore: number;
+  maxBeforeRiskScore: number;
+  overallRiskReductionPercent: number;
+  nlpEntitiesCount: number;
+  regexEntitiesCount: number;
+  customEntitiesCount: number;
+  totalProcessingTimeMs: number;
+  categoryBreakdown: CategorySummary[];
+  files: BatchFileResult[];
 }

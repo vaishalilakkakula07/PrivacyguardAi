@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { analyzeAndAnonymize } from './src/engine/anonymizer.ts';
-import type { ScanOptions } from './src/engine/types.ts';
+import { analyzeAndAnonymize, analyzeBatchFiles } from './src/engine/anonymizer.ts';
+import type { BatchFileInput, ScanOptions } from './src/engine/types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 const MAX_INPUT_CHARS = 1_500_000;
+const MAX_BATCH_FILES = 100;
 
 app.use(express.json({ limit: '5mb' }));
 
@@ -55,6 +56,72 @@ app.post('/api/anonymize', (req, res) => {
     res.json(result);
   } catch {
     res.status(500).json({ error: 'Failed to process anonymization request.' });
+  }
+});
+
+app.post('/api/anonymize-batch', (req, res) => {
+  try {
+    const body = req.body as {
+      files?: unknown;
+      options?: Omit<ScanOptions, 'format'>;
+    };
+
+    if (!Array.isArray(body?.files) || body.files.length === 0) {
+      res.status(400).json({ error: 'At least one file is required for batch processing.' });
+      return;
+    }
+
+    if (body.files.length > MAX_BATCH_FILES) {
+      res.status(413).json({
+        error: `Batch exceeds maximum ephemeral limit of ${MAX_BATCH_FILES} files.`,
+      });
+      return;
+    }
+
+    const options = body.options;
+    if (!options || typeof options !== 'object' || !options.categories || !options.technique) {
+      res.status(400).json({ error: 'Valid scan options are required.' });
+      return;
+    }
+
+    const validFiles: BatchFileInput[] = [];
+    let totalChars = 0;
+
+    for (const item of body.files) {
+      if (
+        item &&
+        typeof item === 'object' &&
+        typeof (item as BatchFileInput).content === 'string' &&
+        (item as BatchFileInput).content.trim().length > 0
+      ) {
+        const f = item as BatchFileInput;
+        totalChars += f.content.length;
+        if (totalChars > MAX_INPUT_CHARS * 2) {
+          res.status(413).json({
+            error: 'Combined batch size exceeds the ephemeral demo character limit.',
+          });
+          return;
+        }
+        validFiles.push({
+          id: String(f.id || validFiles.length + 1),
+          fileName: String(f.fileName || `file_${validFiles.length + 1}.txt`),
+          relativePath: String(f.relativePath || f.fileName || `file_${validFiles.length + 1}.txt`),
+          format: f.format === 'csv' ? 'csv' : 'text',
+          content: f.content,
+          sizeBytes: typeof f.sizeBytes === 'number' ? f.sizeBytes : f.content.length,
+        });
+      }
+    }
+
+    if (validFiles.length === 0) {
+      res.status(400).json({ error: 'No non-empty CSV or TXT files found in batch.' });
+      return;
+    }
+
+    const summary = analyzeBatchFiles(validFiles, options);
+    res.json(summary);
+  } catch {
+    res.status(500).json({ error: 'Failed to process batch anonymization request.' });
   }
 });
 

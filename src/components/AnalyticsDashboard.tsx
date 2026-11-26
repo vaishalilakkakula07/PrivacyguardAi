@@ -11,18 +11,30 @@ import {
   YAxis,
 } from 'recharts';
 import { Eye, EyeOff, Info, Search, ShieldCheck } from 'lucide-react';
-import { CATEGORY_META } from '../engine/anonymizer.ts';
-import type { DetectionCategory, DetectionEngineMethod, ScanResult } from '../engine/types.ts';
+import { CATEGORY_META, TECHNIQUE_LABELS } from '../engine/anonymizer.ts';
+import type {
+  BatchScanSummary,
+  DetectedEntity,
+  DetectionCategory,
+  DetectionEngineMethod,
+  ScanResult,
+} from '../engine/types.ts';
 
 interface AnalyticsDashboardProps {
   scanResult: ScanResult | null;
+  batchSummary?: BatchScanSummary | null;
   onJumpToWorkspace: () => void;
+}
+
+interface AuditEntityRow extends DetectedEntity {
+  sourceFile?: string;
 }
 
 const CHART_COLORS: Record<DetectionCategory, string> = {
   name: '#059669',
   email: '#0D9488',
   mobile: '#10B981',
+  password: '#C026D3',
   aadhaar: '#D97706',
   pan: '#E11D48',
   ip: '#0284C7',
@@ -31,45 +43,64 @@ const CHART_COLORS: Record<DetectionCategory, string> = {
 
 export default function AnalyticsDashboard({
   scanResult,
+  batchSummary,
   onJumpToWorkspace,
 }: AnalyticsDashboardProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<'all' | DetectionEngineMethod>('all');
   const [revealOriginalInTable, setRevealOriginalInTable] = useState(false);
 
+  const isBatchMode = Boolean(batchSummary && batchSummary.files.length > 0);
+
   const countByCategory = useMemo(() => {
     const map: Record<DetectionCategory, number> = {
       name: 0,
       email: 0,
       mobile: 0,
+      password: 0,
       aadhaar: 0,
       pan: 0,
       ip: 0,
       custom: 0,
     };
-    if (!scanResult) return map;
-    for (const item of scanResult.metrics.categoryBreakdown) {
+    const breakdown = isBatchMode
+      ? batchSummary?.categoryBreakdown ?? []
+      : scanResult?.metrics.categoryBreakdown ?? [];
+    for (const item of breakdown) {
       map[item.category] = item.detectedCount;
     }
     return map;
-  }, [scanResult]);
+  }, [isBatchMode, batchSummary, scanResult]);
+
+  const allAuditEntities = useMemo<AuditEntityRow[]>(() => {
+    if (isBatchMode && batchSummary) {
+      return batchSummary.files.flatMap((file) =>
+        file.result.entities.map((ent) => ({
+          ...ent,
+          id: `${file.id}_${ent.id}`,
+          sourceFile: file.relativePath,
+        }))
+      );
+    }
+    return scanResult?.entities ?? [];
+  }, [isBatchMode, batchSummary, scanResult]);
 
   const filteredEntities = useMemo(() => {
-    if (!scanResult) return [];
     const q = searchTerm.trim().toLowerCase();
-    return scanResult.entities.filter((ent) => {
+    return allAuditEntities.filter((ent) => {
       if (engineFilter !== 'all' && ent.engineMethod !== engineFilter) return false;
       if (!q) return true;
       return (
         CATEGORY_META[ent.category].label.toLowerCase().includes(q) ||
         ent.anonymized.toLowerCase().includes(q) ||
         ent.reason.toLowerCase().includes(q) ||
-        (ent.columnName ?? '').toLowerCase().includes(q)
+        (ent.columnName ?? '').toLowerCase().includes(q) ||
+        (ent.sourceFile ?? '').toLowerCase().includes(q)
       );
     });
-  }, [scanResult, searchTerm, engineFilter]);
+  }, [allAuditEntities, searchTerm, engineFilter]);
 
-  if (!scanResult) {
+  if (!scanResult && !isBatchMode) {
     return (
       <section
         id="analytics"
@@ -99,27 +130,74 @@ export default function AnalyticsDashboard({
     );
   }
 
-  const { metrics } = scanResult;
-  const personalIdentifiersCount =
-    countByCategory.aadhaar + countByCategory.pan + countByCategory.ip;
+  const activeBreakdown = isBatchMode
+    ? batchSummary!.categoryBreakdown
+    : scanResult!.metrics.categoryBreakdown;
 
-  const distributionData = metrics.categoryBreakdown.map((c) => ({
+  const totalEntitiesDetected = isBatchMode
+    ? batchSummary!.totalEntitiesDetected
+    : scanResult!.metrics.totalEntitiesDetected;
+
+  const nlpCount = isBatchMode
+    ? batchSummary!.nlpEntitiesCount
+    : scanResult!.metrics.nlpEntitiesCount;
+  const regexCount = isBatchMode
+    ? batchSummary!.regexEntitiesCount
+    : scanResult!.metrics.regexEntitiesCount;
+  const customCount = isBatchMode
+    ? batchSummary!.customEntitiesCount
+    : scanResult!.metrics.customEntitiesCount;
+
+  const beforeScore = isBatchMode
+    ? batchSummary!.avgBeforeRiskScore
+    : scanResult!.metrics.beforeRiskScore;
+  const afterScore = isBatchMode
+    ? batchSummary!.avgAfterRiskScore
+    : scanResult!.metrics.afterRiskScore;
+  const reductionPct = isBatchMode
+    ? batchSummary!.overallRiskReductionPercent
+    : scanResult!.metrics.riskReductionPercent;
+
+  const riskLevelBefore =
+    beforeScore >= 75
+      ? 'Critical'
+      : beforeScore >= 50
+      ? 'High'
+      : beforeScore >= 20
+      ? 'Moderate'
+      : 'Low';
+  const riskLevelAfter =
+    afterScore >= 55
+      ? 'High'
+      : afterScore >= 25
+      ? 'Moderate'
+      : afterScore >= 8
+      ? 'Low'
+      : 'Minimal';
+
+  const personalIdentifiersCount =
+    countByCategory.password +
+    countByCategory.aadhaar +
+    countByCategory.pan +
+    countByCategory.ip;
+
+  const distributionData = activeBreakdown.map((c) => ({
     name: CATEGORY_META[c.category].shortLabel,
     category: c.category,
     detected: c.detectedCount,
     engine: c.engineMethod,
   }));
 
-  const exposureComparisonData = metrics.categoryBreakdown.map((c) => ({
+  const exposureComparisonData = activeBreakdown.map((c) => ({
     name: CATEGORY_META[c.category].shortLabel,
     Before: c.beforeExposure,
     After: c.afterExposure,
   }));
 
   const engineData = [
-    { name: 'NLP / NER', count: metrics.nlpEntitiesCount, fill: '#059669' },
-    { name: 'Regex Patterns', count: metrics.regexEntitiesCount, fill: '#0D9488' },
-    { name: 'Custom Rules', count: metrics.customEntitiesCount, fill: '#16A34A' },
+    { name: 'NLP / NER', count: nlpCount, fill: '#059669' },
+    { name: 'Regex Patterns', count: regexCount, fill: '#0D9488' },
+    { name: 'Custom Rules', count: customCount, fill: '#16A34A' },
   ];
 
   return (
@@ -132,7 +210,9 @@ export default function AnalyticsDashboard({
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold tracking-wider text-emerald-700 uppercase">
-              Live Telemetry · Educational Privacy Risk Assessment
+              {isBatchMode
+                ? `Batch Risk Assessment · ${batchSummary!.totalFiles} Files`
+                : 'Live Telemetry · Educational Privacy Risk Assessment'}
             </p>
             <h2
               className="mt-2 font-display text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl"
@@ -141,8 +221,9 @@ export default function AnalyticsDashboard({
               AI Detection Results & Privacy Risk Analysis
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-slate-600">
-              All metrics and visualizations below are computed directly from
-              your current workspace scan results.
+              {isBatchMode
+                ? `Aggregated metrics and audit entries across all ${batchSummary!.totalFiles} files in the active batch.`
+                : 'All metrics and visualizations below are computed directly from your current workspace scan results.'}
             </p>
           </div>
 
@@ -160,10 +241,10 @@ export default function AnalyticsDashboard({
           <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-4">
             <div className="text-xs text-emerald-900">Total Sensitive</div>
             <div className="mt-1.5 font-mono text-2xl font-bold text-slate-950 tabular-nums">
-              {metrics.totalEntitiesDetected}
+              {totalEntitiesDetected}
             </div>
             <div className="mt-1 text-[11px] font-medium text-emerald-700">
-              All Categories
+              {isBatchMode ? `${batchSummary!.totalFiles} Files` : 'All Categories'}
             </div>
           </div>
 
@@ -192,13 +273,13 @@ export default function AnalyticsDashboard({
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">IDs (Aadhaar/PAN/IP)</div>
+            <div className="text-xs text-slate-500">IDs & Passwords</div>
             <div className="mt-1.5 font-mono text-2xl font-bold text-amber-700 tabular-nums">
               {personalIdentifiersCount}
             </div>
             <div className="mt-1 text-[11px] text-slate-500">
-              {countByCategory.aadhaar} Aadhaar · {countByCategory.pan} PAN ·{' '}
-              {countByCategory.ip} IP
+              {countByCategory.password} Pwd · {countByCategory.aadhaar} Aadhaar ·{' '}
+              {countByCategory.pan} PAN · {countByCategory.ip} IP
             </div>
           </div>
 
@@ -215,42 +296,51 @@ export default function AnalyticsDashboard({
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="rounded-xl border border-rose-200 bg-white p-5">
             <div className="flex items-center justify-between text-xs text-slate-600">
-              <span>Before Anonymization (Estimated Risk)</span>
+              <span>
+                {isBatchMode
+                  ? 'Avg Before Anonymization Risk'
+                  : 'Before Anonymization (Estimated Risk)'}
+              </span>
               <span className="font-semibold text-rose-700">
-                {metrics.riskLevelBefore}
+                {riskLevelBefore}
+                {isBatchMode ? ` · Peak ${batchSummary!.maxBeforeRiskScore}` : ''}
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="font-mono text-3xl font-bold text-slate-950 tabular-nums">
-                {metrics.beforeRiskScore}
+                {beforeScore}
               </span>
               <span className="text-xs text-slate-500">/ 100</span>
             </div>
             <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
               <div
                 className="h-full rounded-full bg-rose-600 transition-all duration-300"
-                style={{ width: `${metrics.beforeRiskScore}%` }}
+                style={{ width: `${beforeScore}%` }}
               />
             </div>
           </div>
 
           <div className="rounded-xl border border-emerald-300 bg-white p-5">
             <div className="flex items-center justify-between text-xs text-slate-600">
-              <span>After Anonymization (Residual Risk)</span>
+              <span>
+                {isBatchMode
+                  ? 'Avg After Anonymization Risk'
+                  : 'After Anonymization (Residual Risk)'}
+              </span>
               <span className="font-semibold text-emerald-700">
-                {metrics.riskLevelAfter}
+                {riskLevelAfter}
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="font-mono text-3xl font-bold text-emerald-700 tabular-nums">
-                {metrics.afterRiskScore}
+                {afterScore}
               </span>
               <span className="text-xs text-slate-500">/ 100</span>
             </div>
             <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
               <div
                 className="h-full rounded-full bg-emerald-600 transition-all duration-300"
-                style={{ width: `${metrics.afterRiskScore}%` }}
+                style={{ width: `${afterScore}%` }}
               />
             </div>
           </div>
@@ -259,17 +349,19 @@ export default function AnalyticsDashboard({
             <div className="flex items-center justify-between text-xs text-slate-600">
               <span>Estimated Privacy Improvement</span>
               <span className="font-semibold text-emerald-800">
-                {scanResult.technique.toUpperCase()}
+                {scanResult?.isMixedMode
+                  ? 'MIXED RULES'
+                  : (scanResult?.technique ?? 'partial').toUpperCase()}
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="font-mono text-3xl font-bold text-emerald-700 tabular-nums">
-                {metrics.riskReductionPercent}%
+                {reductionPct}%
               </span>
               <span className="text-xs text-slate-600">exposure reduction</span>
             </div>
             <p className="mt-2.5 text-[11px] leading-relaxed text-slate-600">
-              {metrics.limitationsNote}
+              Educational estimate only. Automated NLP/NER and regex pipelines reduce direct identifier exposure but cannot guarantee zero re-identification risk.
             </p>
           </div>
         </div>
@@ -282,7 +374,7 @@ export default function AnalyticsDashboard({
               Sensitive Information Distribution
             </h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              Detected entity counts across the 7 privacy categories
+              Detected entity counts across the 8 privacy categories
             </p>
             <div className="mt-4 h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -427,14 +519,17 @@ export default function AnalyticsDashboard({
         </div>
 
         {/* Category-Wise Detection Table */}
-        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+        <div
+          id="audit-log"
+          className="mt-6 scroll-mt-20 rounded-xl border border-slate-200 bg-white p-5"
+        >
           <div className="flex flex-col justify-between gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center">
             <div>
               <h3 className="font-display text-base font-semibold text-slate-950">
                 Detected Entities Audit Log
               </h3>
               <p className="text-xs text-slate-500 tabular-nums">
-                {filteredEntities.length} of {scanResult.entities.length} detected
+                {filteredEntities.length} of {allAuditEntities.length} detected
                 items shown (ephemeral memory view)
               </p>
             </div>
@@ -446,7 +541,7 @@ export default function AnalyticsDashboard({
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Filter category or token..."
+                  placeholder="Filter file, category, or token..."
                   className="rounded-lg border border-slate-300 bg-slate-50 py-1.5 pr-3 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none"
                 />
               </div>
@@ -499,11 +594,19 @@ export default function AnalyticsDashboard({
               <table className="w-full border-collapse text-left text-xs">
                 <thead className="sticky top-0 bg-slate-100 text-slate-700">
                   <tr>
+                    {isBatchMode && (
+                      <th className="border-b border-slate-200 px-3 py-2.5 font-semibold">
+                        File
+                      </th>
+                    )}
                     <th className="border-b border-slate-200 px-3 py-2.5 font-semibold">
                       Category
                     </th>
                     <th className="border-b border-slate-200 px-3 py-2.5 font-semibold">
                       Detection Engine
+                    </th>
+                    <th className="border-b border-slate-200 px-3 py-2.5 font-semibold">
+                      Masking Style
                     </th>
                     <th className="border-b border-slate-200 px-3 py-2.5 font-semibold">
                       Source Value
@@ -517,13 +620,21 @@ export default function AnalyticsDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {filteredEntities.map((ent) => (
+                  {filteredEntities.slice(0, 300).map((ent) => (
                     <tr key={ent.id} className="hover:bg-slate-50">
+                      {isBatchMode && (
+                        <td className="px-3 py-2.5 font-mono text-[11px] text-slate-600 whitespace-nowrap">
+                          {ent.sourceFile}
+                        </td>
+                      )}
                       <td className="px-3 py-2.5 font-medium text-slate-900 whitespace-nowrap">
                         {CATEGORY_META[ent.category].label}
                       </td>
                       <td className="px-3 py-2.5 font-medium text-emerald-700 whitespace-nowrap">
                         {ent.engineMethod}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-700 whitespace-nowrap">
+                        {TECHNIQUE_LABELS[ent.techniqueApplied]}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-rose-700 whitespace-nowrap">
                         {revealOriginalInTable ? ent.original : '••••••••••'}
