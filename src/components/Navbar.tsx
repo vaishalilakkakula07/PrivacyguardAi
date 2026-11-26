@@ -51,10 +51,10 @@ export default function Navbar({
           PrivacyGuardAI
         </a>
 
-        {/* Zone 2: 5 concise single-line navigation links */}
+        {/* Zone 2: 5 concise single-line navigation links with equal spacing */}
         <nav
           aria-label="Primary Navigation"
-          className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600"
+          className="hidden md:flex flex-1 items-center justify-evenly text-sm font-medium text-slate-600"
         >
           {NAV_LINKS.map((link) => (
             <a
@@ -64,7 +64,7 @@ export default function Navbar({
                 e.preventDefault();
                 handleLinkClick(link.target);
               }}
-              className="whitespace-nowrap shrink-0 py-1 text-slate-600 transition-colors duration-150 hover:text-emerald-700 hover:underline hover:underline-offset-8 decoration-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
+              className="whitespace-nowrap shrink-0 px-2 py-1 text-slate-600 transition-colors duration-150 hover:text-emerald-700 hover:underline hover:underline-offset-8 decoration-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
             >
               {link.label}
             </a>
