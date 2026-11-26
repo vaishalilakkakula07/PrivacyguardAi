@@ -14,6 +14,7 @@ import Footer from './components/Footer.tsx';
 import { SAMPLE_DATASETS } from './data/samples.ts';
 import {
   DEFAULT_CUSTOM_LABELS,
+  DEFAULT_PARTIAL_SYMBOLS,
   analyzeAndAnonymize,
   analyzeBatchFiles,
   buildBatchPrivacyReport,
@@ -30,6 +31,8 @@ import type {
   CustomLabelMap,
   DetectionCategory,
   InputFormat,
+  PartialMaskSymbol,
+  PartialSymbolMap,
   ScanOptions,
   ScanResult,
 } from './engine/types.ts';
@@ -97,6 +100,9 @@ export default function App() {
   const [customLabels, setCustomLabels] = useState<CustomLabelMap>(
     DEFAULT_CUSTOM_LABELS
   );
+  const [partialSymbols, setPartialSymbols] = useState<PartialSymbolMap>(
+    DEFAULT_PARTIAL_SYMBOLS
+  );
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [reportModalOpen, setReportModalOpen] = useState<boolean>(false);
   const [batchFiles, setBatchFiles] = useState<BatchFileInput[]>([]);
@@ -116,6 +122,7 @@ export default function App() {
       },
       technique: 'partial',
       categoryTechniques: createDefaultCategoryTechniques(),
+      partialSymbols: DEFAULT_PARTIAL_SYMBOLS,
       customTerms: DEFAULT_SAMPLE.suggestedCustomTerms,
       customLabels: DEFAULT_CUSTOM_LABELS,
       format: DEFAULT_SAMPLE.format,
@@ -232,6 +239,7 @@ export default function App() {
           categories,
           technique,
           categoryTechniques,
+          partialSymbols,
           customTerms,
           customLabels,
         },
@@ -253,6 +261,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms,
         customLabels,
         format: effectiveFormat,
@@ -268,6 +277,7 @@ export default function App() {
     categories,
     technique,
     categoryTechniques,
+    partialSymbols,
     customTerms,
     customLabels,
     format,
@@ -282,6 +292,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms,
         customLabels,
       });
@@ -305,6 +316,7 @@ export default function App() {
       categories,
       technique,
       categoryTechniques,
+      partialSymbols,
       customTerms,
       customLabels,
       format,
@@ -316,6 +328,7 @@ export default function App() {
     categories,
     technique,
     categoryTechniques,
+    partialSymbols,
     customTerms,
     customLabels,
     format,
@@ -347,6 +360,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms,
         customLabels,
         format: detectedFormat,
@@ -372,6 +386,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms,
         customLabels,
       },
@@ -414,6 +429,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms,
         customLabels,
       },
@@ -446,6 +462,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms: combinedTerms,
         customLabels,
       },
@@ -475,6 +492,7 @@ export default function App() {
   const handleApplySmartDefaults = () => {
     setTechnique('partial');
     setCategoryTechniques(createDefaultCategoryTechniques());
+    setPartialSymbols(DEFAULT_PARTIAL_SYMBOLS);
   };
 
   const handleCategoryTechniqueChange = (
@@ -501,6 +519,13 @@ export default function App() {
     setCustomLabels((prev) => ({ ...prev, [cat]: val }));
   };
 
+  const handlePartialSymbolChange = (
+    cat: DetectionCategory,
+    sym: PartialMaskSymbol
+  ) => {
+    setPartialSymbols((prev) => ({ ...prev, [cat]: sym }));
+  };
+
   const handleLoadSample = (sampleId: string) => {
     const found = SAMPLE_DATASETS.find((s) => s.id === sampleId);
     if (!found) return;
@@ -517,6 +542,7 @@ export default function App() {
         categories,
         technique,
         categoryTechniques,
+        partialSymbols,
         customTerms: found.suggestedCustomTerms,
         customLabels,
         format: found.format,
@@ -659,9 +685,11 @@ export default function App() {
           onToggleCategory={handleToggleCategory}
           technique={technique}
           categoryTechniques={categoryTechniques}
+          partialSymbols={partialSymbols}
           onTechniqueChange={handleTechniquePresetChange}
           onApplySmartDefaults={handleApplySmartDefaults}
           onCategoryTechniqueChange={handleCategoryTechniqueChange}
+          onPartialSymbolChange={handlePartialSymbolChange}
           customTerms={customTerms}
           onAddCustomTerm={handleAddCustomTerm}
           onRemoveCustomTerm={handleRemoveCustomTerm}

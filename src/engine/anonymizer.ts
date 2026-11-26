@@ -12,6 +12,8 @@ import type {
   DetectedEntity,
   DetectionCategory,
   DetectionEngineMethod,
+  PartialMaskSymbol,
+  PartialSymbolMap,
   RiskAnalysisMetrics,
   ScanOptions,
   ScanResult,
@@ -142,17 +144,50 @@ const PREVIEW_SAMPLES: Record<DetectionCategory, string> = {
   custom: 'Project Falcon',
 };
 
+export const DEFAULT_PARTIAL_SYMBOLS: PartialSymbolMap = {
+  name: '~',
+  email: '*',
+  mobile: '●',
+  password: '■',
+  aadhaar: 'X',
+  pan: '#',
+  ip: '-',
+  custom: '?',
+};
+
+export const PARTIAL_SYMBOL_OPTIONS: {
+  value: PartialMaskSymbol;
+  label: string;
+  example: string;
+}[] = [
+  { value: '*', label: 'Asterisk (*)', example: '****' },
+  { value: '●', label: 'Bullet (●)', example: '●●●●' },
+  { value: '■', label: 'Square (■)', example: '■■■■' },
+  { value: 'X', label: 'X Mask (X)', example: 'XXXX' },
+  { value: '#', label: 'Hash (#)', example: '####' },
+  { value: '-', label: 'Dash (-)', example: '----' },
+  { value: '~', label: 'Tilde (~)', example: '~~~~' },
+  { value: '?', label: 'Question (?)', example: '????' },
+  { value: '•', label: 'Dot (•)', example: '••••' },
+  { value: '[HIDDEN]', label: 'Bracket ([HIDDEN])', example: '[HIDDEN]' },
+];
+
 export function getCategoryPreview(
   category: DetectionCategory,
   technique: AnonymizationTechnique,
-  customLabels: CustomLabelMap
+  customLabels: CustomLabelMap,
+  partialSymbols?: PartialSymbolMap
 ): string {
   const sample = PREVIEW_SAMPLES[category];
   switch (technique) {
     case 'complete':
       return '[REDACTED]';
     case 'partial':
-      return applyPartialMask(sample, category);
+      return applyPartialMask(
+        sample,
+        category,
+        partialSymbols?.[category] ?? DEFAULT_PARTIAL_SYMBOLS[category]
+      );
     case 'replacement':
       return `[${CATEGORY_META[category].tokenPrefix}_001]`;
     case 'custom': {
@@ -506,63 +541,86 @@ function resolveOverlaps(rawMatches: RawMatch[]): RawMatch[] {
   return accepted.sort((a, b) => a.start - b.start);
 }
 
-function applyPartialMask(value: string, category: DetectionCategory): string {
+function applyPartialMask(
+  value: string,
+  category: DetectionCategory,
+  symbolOverride?: PartialMaskSymbol
+): string {
+  const sym = symbolOverride ?? DEFAULT_PARTIAL_SYMBOLS[category];
+  const isBracket = sym === '[HIDDEN]';
+
   switch (category) {
     case 'email': {
       const atIdx = value.indexOf('@');
-      if (atIdx <= 0) return '****';
+      if (atIdx <= 0) return isBracket ? '[HIDDEN]' : sym.repeat(4);
       const local = value.slice(0, atIdx);
       const domain = value.slice(atIdx);
+      if (isBracket) return `[HIDDEN]${domain}`;
       const visible = local.slice(0, 1);
-      const stars = '*'.repeat(Math.max(4, local.length - 1));
-      return `${visible}${stars}${domain}`;
+      const masked = sym.repeat(Math.max(4, local.length - 1));
+      return `${visible}${masked}${domain}`;
     }
     case 'mobile': {
       const digits = value.replace(/\D/g, '');
-      if (digits.length < 6) return '******';
+      if (digits.length < 6) return isBracket ? '[HIDDEN]' : sym.repeat(6);
       const prefix = value.startsWith('+') ? value.slice(0, 4) : value.slice(0, 2);
       const suffix = value.slice(-2);
+      if (isBracket) return `${prefix}[HIDDEN]${suffix}`;
       const maskedLen = Math.max(4, value.length - prefix.length - suffix.length);
-      return `${prefix}${'*'.repeat(maskedLen)}${suffix}`;
+      return `${prefix}${sym.repeat(maskedLen)}${suffix}`;
     }
     case 'aadhaar': {
       const cleaned = value.trim();
       const last4 = cleaned.slice(-4);
+      if (isBracket) {
+        return cleaned.includes('-')
+          ? `[HIDDEN]-[HIDDEN]-${last4}`
+          : `[HIDDEN] [HIDDEN] ${last4}`;
+      }
+      const block = sym.repeat(4);
       return cleaned.includes('-')
-        ? `XXXX-XXXX-${last4}`
+        ? `${block}-${block}-${last4}`
         : cleaned.includes(' ')
-        ? `XXXX XXXX ${last4}`
-        : `XXXXXXXX${last4}`;
+        ? `${block} ${block} ${last4}`
+        : `${sym.repeat(8)}${last4}`;
     }
     case 'pan': {
-      if (value.length !== 10) return '**********';
-      return `${value.slice(0, 2)}*****${value.slice(7)}`;
+      if (value.length !== 10) return isBracket ? '[HIDDEN]' : sym.repeat(10);
+      return isBracket
+        ? `${value.slice(0, 2)}[HIDDEN]${value.slice(7)}`
+        : `${value.slice(0, 2)}${sym.repeat(5)}${value.slice(7)}`;
     }
     case 'ip': {
       if (value.includes('.')) {
         const parts = value.split('.');
         if (parts.length === 4) {
-          return `${parts[0]}.${parts[1]}.*.*`;
+          return isBracket
+            ? `${parts[0]}.${parts[1]}.[HIDDEN].[HIDDEN]`
+            : `${parts[0]}.${parts[1]}.${sym.repeat(3)}.${sym.repeat(3)}`;
         }
       }
-      return `${value.slice(0, 4)}:****:****`;
+      return isBracket
+        ? `${value.slice(0, 4)}:[HIDDEN]:[HIDDEN]`
+        : `${value.slice(0, 4)}:${sym.repeat(4)}:${sym.repeat(4)}`;
     }
     case 'name': {
       return value
         .split(/\s+/)
         .map((part) => {
-          if (part.length <= 1) return '*';
-          return `${part[0]}${'*'.repeat(Math.min(5, part.length - 1))}`;
+          if (isBracket) return part.length <= 1 ? '[HIDDEN]' : `${part[0]}[HIDDEN]`;
+          if (part.length <= 1) return sym;
+          return `${part[0]}${sym.repeat(Math.min(5, part.length - 1))}`;
         })
         .join(' ');
     }
     case 'password': {
-      return '••••••••';
+      return isBracket ? '[HIDDEN]' : sym.repeat(8);
     }
     case 'custom':
     default: {
-      if (value.length <= 2) return '**';
-      return `${value[0]}${'*'.repeat(Math.max(3, value.length - 2))}${value[value.length - 1]}`;
+      if (isBracket) return '[HIDDEN]';
+      if (value.length <= 2) return sym.repeat(2);
+      return `${value[0]}${sym.repeat(Math.max(3, value.length - 2))}${value[value.length - 1]}`;
     }
   }
 }
@@ -593,13 +651,14 @@ function formatAnonymizedValue(
   category: DetectionCategory,
   technique: AnonymizationTechnique,
   customLabels: CustomLabelMap,
-  registry: TokenRegistry
+  registry: TokenRegistry,
+  partialSymbols?: PartialSymbolMap
 ): string {
   switch (technique) {
     case 'complete':
       return '[REDACTED]';
     case 'partial':
-      return applyPartialMask(original, category);
+      return applyPartialMask(original, category, partialSymbols?.[category]);
     case 'replacement': {
       const key = `${category}::${original.toLowerCase()}`;
       const existing = registry.valueToToken.get(key);
@@ -668,7 +727,8 @@ function anonymizeSegment(
       match.category,
       effectiveTechnique,
       options.customLabels,
-      registry
+      registry,
+      options.partialSymbols
     );
     output += replacement;
     cursor = match.end;

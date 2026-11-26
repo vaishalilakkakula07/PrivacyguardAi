@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import {
   CATEGORY_META,
+  PARTIAL_SYMBOL_OPTIONS,
   TECHNIQUE_LABELS,
   getCategoryPreview,
 } from '../engine/anonymizer.ts';
@@ -35,6 +36,8 @@ import type {
   DetectedEntity,
   DetectionCategory,
   InputFormat,
+  PartialMaskSymbol,
+  PartialSymbolMap,
   ScanResult,
 } from '../engine/types.ts';
 import { SAMPLE_DATASETS } from '../data/samples.ts';
@@ -52,9 +55,11 @@ interface WorkspaceSectionProps {
   onToggleCategory: (cat: DetectionCategory) => void;
   technique: AnonymizationTechnique;
   categoryTechniques: CategoryTechniqueMap;
+  partialSymbols: PartialSymbolMap;
   onTechniqueChange: (tech: AnonymizationTechnique) => void;
   onApplySmartDefaults: () => void;
   onCategoryTechniqueChange: (cat: DetectionCategory, tech: AnonymizationTechnique) => void;
+  onPartialSymbolChange: (cat: DetectionCategory, sym: PartialMaskSymbol) => void;
   customTerms: string[];
   onAddCustomTerm: (term: string) => void;
   onRemoveCustomTerm: (term: string) => void;
@@ -213,9 +218,11 @@ export default function WorkspaceSection({
   onToggleCategory,
   technique,
   categoryTechniques,
+  partialSymbols,
   onTechniqueChange,
   onApplySmartDefaults,
   onCategoryTechniqueChange,
+  onPartialSymbolChange,
   customTerms,
   onAddCustomTerm,
   onRemoveCustomTerm,
@@ -894,10 +901,12 @@ export default function WorkspaceSection({
                     const meta = CATEGORY_META[cat];
                     const active = categories[cat];
                     const catTech = categoryTechniques[cat];
+                    const currentSymbol = partialSymbols[cat];
                     const previewOutput = getCategoryPreview(
                       cat,
                       catTech,
-                      customLabels
+                      customLabels,
+                      partialSymbols
                     );
                     return (
                       <div
@@ -952,6 +961,31 @@ export default function WorkspaceSection({
                             <option value="custom">Custom Label</option>
                           </select>
                         </div>
+
+                        {active && catTech === 'partial' && (
+                          <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
+                            <span className="text-[10px] font-medium text-emerald-800 whitespace-nowrap">
+                              Mask Symbol:
+                            </span>
+                            <select
+                              aria-label={`Partial masking symbol for ${meta.label}`}
+                              value={currentSymbol}
+                              onChange={(e) =>
+                                onPartialSymbolChange(
+                                  cat,
+                                  e.target.value as PartialMaskSymbol
+                                )
+                              }
+                              className="w-full max-w-[180px] rounded border border-slate-300 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-900 focus:border-emerald-600 focus:outline-none cursor-pointer"
+                            >
+                              {PARTIAL_SYMBOL_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
 
                         {active && catTech === 'custom' && (
                           <div className="mt-2 flex items-center gap-2 border-t border-slate-100 pt-2">

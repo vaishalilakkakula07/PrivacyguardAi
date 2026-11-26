@@ -20,6 +20,20 @@ export type InputFormat = 'text' | 'csv';
 
 export type CategoryTechniqueMap = Record<DetectionCategory, AnonymizationTechnique>;
 
+export type PartialMaskSymbol =
+  | '*'
+  | '●'
+  | '■'
+  | 'X'
+  | '-'
+  | '#'
+  | '~'
+  | '?'
+  | '•'
+  | '[HIDDEN]';
+
+export type PartialSymbolMap = Record<DetectionCategory, PartialMaskSymbol>;
+
 export interface CustomLabelMap {
   name: string;
   email: string;
@@ -35,6 +49,7 @@ export interface ScanOptions {
   categories: Record<DetectionCategory, boolean>;
   technique: AnonymizationTechnique;
   categoryTechniques?: CategoryTechniqueMap;
+  partialSymbols?: PartialSymbolMap;
   customTerms: string[];
   customLabels: CustomLabelMap;
   format: InputFormat;

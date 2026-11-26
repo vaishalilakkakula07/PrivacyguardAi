@@ -29,7 +29,7 @@ const DEMO_SEQUENCES = [
   {
     field: 'Mobile Number · Regex',
     raw: '+91 9848012345',
-    masked: '+91 ********45',
+    masked: '+91 ●●●●●●●●45',
     technique: 'Partial Masking',
   },
   {
