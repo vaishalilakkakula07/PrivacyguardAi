@@ -1414,14 +1414,9 @@ export default function WorkspaceSection({
                                 className="px-3 py-2.5 font-mono whitespace-nowrap"
                               >
                                 {changed ? (
-                                  <div className="space-y-0.5">
-                                    <div className="text-[11px] text-rose-700 line-through">
-                                      {origCell}
-                                    </div>
-                                    <div className="font-semibold text-emerald-700">
-                                      {anonCell}
-                                    </div>
-                                  </div>
+                                  <span className="font-semibold text-emerald-700">
+                                    {anonCell}
+                                  </span>
                                 ) : (
                                   <span className="text-slate-700">{anonCell}</span>
                                 )}
